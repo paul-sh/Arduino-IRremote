@@ -27,8 +27,11 @@ int MATCH(int measured, int desired) {
   Serial.print(" <= ");
   Serial.print(measured, DEC);
   Serial.print(" <= ");
-  Serial.println(TICKS_HIGH(desired), DEC);
-  return measured >= TICKS_LOW(desired) && measured <= TICKS_HIGH(desired);
+  Serial.print(TICKS_HIGH(desired), DEC);
+  int res = measured >= TICKS_LOW(desired) && measured <= TICKS_HIGH(desired);
+  if(res) Serial.print(" - match");
+  Serial.println();
+  return res;
 }
 
 int MATCH_MARK(int measured_ticks, int desired_us) {
@@ -41,8 +44,11 @@ int MATCH_MARK(int measured_ticks, int desired_us) {
   Serial.print(" <= ");
   Serial.print(measured_ticks, DEC);
   Serial.print(" <= ");
-  Serial.println(TICKS_HIGH(desired_us + MARK_EXCESS), DEC);
-  return measured_ticks >= TICKS_LOW(desired_us + MARK_EXCESS) && measured_ticks <= TICKS_HIGH(desired_us + MARK_EXCESS);
+  Serial.print(TICKS_HIGH(desired_us + MARK_EXCESS), DEC);
+  int res = measured_ticks >= TICKS_LOW(desired_us + MARK_EXCESS) && measured_ticks <= TICKS_HIGH(desired_us + MARK_EXCESS);
+  if(res) Serial.print(" - match");
+  Serial.println();
+  return res;
 }
 
 int MATCH_SPACE(int measured_ticks, int desired_us) {
@@ -55,8 +61,11 @@ int MATCH_SPACE(int measured_ticks, int desired_us) {
   Serial.print(" <= ");
   Serial.print(measured_ticks, DEC);
   Serial.print(" <= ");
-  Serial.println(TICKS_HIGH(desired_us - MARK_EXCESS), DEC);
-  return measured_ticks >= TICKS_LOW(desired_us - MARK_EXCESS) && measured_ticks <= TICKS_HIGH(desired_us - MARK_EXCESS);
+  Serial.print(TICKS_HIGH(desired_us - MARK_EXCESS), DEC);
+  int res = measured_ticks >= TICKS_LOW(desired_us - MARK_EXCESS) && measured_ticks <= TICKS_HIGH(desired_us - MARK_EXCESS);
+  if(res) Serial.print(" - match");
+  Serial.println();
+  return res;
 }
 #endif
 
@@ -166,6 +175,36 @@ void IRsend::sendRC6(unsigned long data, int nbits)
   space(0); // Turn off at end
 }
 
+// address and data are considered 24bit wide. 
+// Based on Wolfgang code (http://www.arcfn.com/2009/08/multi-protocol-infrared-remote-library.html?showComment=1253216531228#c4344993120598576281)
+void IRsend::sendPanasonic(unsigned long address, unsigned long data) {
+  enableIROut(38);
+  mark(PANASONIC_HDR_MARK);
+  space(PANASONIC_HDR_SPACE);
+  for (int i=0; i < 24; i++) {
+    mark(PANASONIC_BIT_MARK);
+    if (address & 0x800000) {
+      space(PANASONIC_ONE_SPACE);
+    } else {
+      space(PANASONIC_ZERO_SPACE);
+    }
+    address <<= 1;
+  }
+  for (int i=0; i < 24; i++) {
+    mark(PANASONIC_BIT_MARK);
+    if (data & 0x800000) {
+      space(PANASONIC_ONE_SPACE);
+    } else {
+      space(PANASONIC_ZERO_SPACE);
+    }
+    data <<= 1;
+  }
+  mark(PANASONIC_BIT_MARK);
+  space(30000);
+  space(30000);
+  space(14000);
+}
+
 void IRsend::mark(int time) {
   // Sends an IR mark for the specified number of microseconds.
   // The mark output is modulated at the PWM frequency.
@@ -221,19 +260,19 @@ IRrecv::IRrecv(int recvpin)
 // initialization
 void IRrecv::enableIRIn() {
   // setup pulse clock timer interrupt
-  TCCR2A = 0;  // normal mode
+  TCCR1A = 0;  // normal mode
 
   //Prescale /8 (16M/8 = 0.5 microseconds per tick)
   // Therefore, the timer interval can range from 0.5 to 128 microseconds
   // depending on the reset value (255 to 0)
-  cbi(TCCR2B,CS22);
-  sbi(TCCR2B,CS21);
-  cbi(TCCR2B,CS20);
+  cbi(TCCR1B,CS12);
+  sbi(TCCR1B,CS11);
+  cbi(TCCR1B,CS10);
 
   //Timer2 Overflow Interrupt Enable
-  sbi(TIMSK2,TOIE2);
+  sbi(TIMSK1,TOIE1);
 
-  RESET_TIMER2;
+  RESET_TIMER1;
 
   sei();  // enable interrupts
 
@@ -254,16 +293,16 @@ void IRrecv::blink13(int blinkflag)
     pinMode(BLINKLED, OUTPUT);
 }
 
-// TIMER2 interrupt code to collect raw data.
+// TIMER1 interrupt code to collect raw data.
 // Widths of alternating SPACE, MARK are recorded in rawbuf.
 // Recorded in ticks of 50 microseconds.
 // rawlen counts the number of entries recorded so far.
 // First entry is the SPACE between transmissions.
 // As soon as a SPACE gets long, ready is set, state switches to IDLE, timing of SPACE continues.
 // As soon as first MARK arrives, gap width is recorded, ready is cleared, and new logging starts
-ISR(TIMER2_OVF_vect)
+ISR(TIMER1_OVF_vect)
 {
-  RESET_TIMER2;
+  RESET_TIMER1;
 
   uint8_t irdata = (uint8_t)digitalRead(irparams.recvpin);
 
@@ -320,10 +359,18 @@ ISR(TIMER2_OVF_vect)
 
   if (irparams.blinkflag) {
     if (irdata == MARK) {
+#if defined(__AVR_ATmega32U4__) // Teensy
+      PORTD |= (1<<6);  
+#else
       PORTB |= B00100000;  // turn pin 13 LED on
+#endif
     } 
     else {
+#if defined(__AVR_ATmega32U4__) // Teensy
+      PORTD &= ~(1<<6);  
+#else
       PORTB &= B11011111;  // turn pin 13 LED off
+#endif
     }
   }
 }
@@ -368,6 +415,15 @@ int IRrecv::decode(decode_results *results) {
   if (decodeRC6(results)) {
     return DECODED;
   }
+#ifdef DEBUG
+  Serial.println("Attempting Panasonic decode");
+#endif 
+  if (decodePanasonic(results)) {
+    return DECODED;
+  }
+#ifdef DEBUG
+  Serial.println("Attempting Hash decode");
+#endif 
   // decodeHash returns a hash on any input.
   // Thus, it needs to be last in the list.
   // If you add any decodes, add them before this.
@@ -599,6 +655,65 @@ long IRrecv::decodeRC6(decode_results *results) {
   return DECODED;
 }
 
+// Decodes Panasonic remotes.
+// Based on Wolfgang code (http://www.arcfn.com/2009/08/multi-protocol-infrared-remote-library.html?showComment=1253216531228#c4344993120598576281)
+// Tested with Panasonic EUR7711060
+long IRrecv::decodePanasonic(decode_results *results) {
+  if (irparams.rawlen < 2 * PANASONIC_BITS + 2) {
+    return ERR;
+  }
+
+  unsigned long data = 0;
+  int offset = 1;
+
+  if (!MATCH_MARK(results->rawbuf[offset], PANASONIC_HDR_MARK)) {
+    return ERR;
+  }
+  offset++;
+  if (!MATCH_SPACE(results->rawbuf[offset], PANASONIC_HDR_SPACE)) {
+    return ERR;
+  }
+  offset++;
+
+  // decoding 24bit address
+  for (int i = 0; i < 24; i++) {
+    if (!MATCH_MARK(results->rawbuf[offset], PANASONIC_BIT_MARK)) {
+      return ERR;
+    }
+    offset++;
+    if (MATCH_SPACE(results->rawbuf[offset],PANASONIC_ONE_SPACE)) {
+      data = (data << 1) | 1;
+    } else if (MATCH_SPACE(results->rawbuf[offset],PANASONIC_ZERO_SPACE)) {
+      data <<= 1;
+    } else {
+      return ERR;
+    }
+    offset++;
+  }
+  results->address = data;
+
+  // decoding 24bit value
+  data = 0;
+  for (int i = 0; i < 24; i++) {
+    if (!MATCH_MARK(results->rawbuf[offset], PANASONIC_BIT_MARK)) {
+      return ERR;
+    }
+    offset++;
+    if (MATCH_SPACE(results->rawbuf[offset],PANASONIC_ONE_SPACE)) {
+      data = (data << 1) | 1;
+    } else if (MATCH_SPACE(results->rawbuf[offset],PANASONIC_ZERO_SPACE)) {
+      data <<= 1;
+    } else {
+      return ERR;
+    }
+    offset++;
+  }
+  
+  results->value = data;
+  results->decode_type = PANASONIC;
+  results->bits = 24;
+  return DECODED;
+}
 /* -----------------------------------------------------------------------
  * hashdecode - decode an arbitrary IR code.
  * Instead of decoding using a standard encoding scheme

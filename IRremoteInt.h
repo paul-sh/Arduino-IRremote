@@ -15,15 +15,19 @@
 #include <WProgram.h>
 
 #define CLKFUDGE 5      // fudge factor for clock interrupt overhead
-#define CLK 256      // max value for clock (timer 2)
-#define PRESCALE 8      // timer2 clock prescale
+#define CLK 65536      // max value for clock (timer 1)
+#define PRESCALE 8      // timer1 clock prescale
 #define SYSCLOCK 16000000  // main Arduino clock
 #define CLKSPERUSEC (SYSCLOCK/PRESCALE/1000000)   // timer clocks per microsecond
 
 #define ERR 0
 #define DECODED 1
 
-#define BLINKLED 13
+#if defined(__AVR_ATmega32U4__) // Teensy
+#define BLINKLED 11
+#else
+#define BLINKLED 13				// Arduino
+#endif
 
 // defines for setting and clearing register bits
 #ifndef cbi
@@ -34,8 +38,8 @@
 #endif
 
 // clock timer reset value
-#define INIT_TIMER_COUNT2 (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
-#define RESET_TIMER2 TCNT2 = INIT_TIMER_COUNT2
+#define INIT_TIMER_COUNT (CLK - USECPERTICK*CLKSPERUSEC + CLKFUDGE)
+#define RESET_TIMER1 TCNT1 = INIT_TIMER_COUNT
 
 // pulse parameters in usec
 #define NEC_HDR_MARK	9000
@@ -74,10 +78,18 @@
 #define DISH_RPT_SPACE 6200
 #define DISH_TOP_BIT 0x8000
 
+#define PANASONIC_HDR_MARK 3600
+#define PANASONIC_HDR_SPACE 1650
+#define PANASONIC_BIT_MARK 525
+#define PANASONIC_ONE_SPACE 1250
+#define PANASONIC_ZERO_SPACE 450
+
 #define SHARP_BITS 15
 #define DISH_BITS 16
+#define PANASONIC_BITS 48
 
-#define TOLERANCE 25  // percent tolerance in measurements
+
+#define TOLERANCE 30  // percent tolerance in measurements
 #define LTOL (1.0 - TOLERANCE/100.) 
 #define UTOL (1.0 + TOLERANCE/100.) 
 
